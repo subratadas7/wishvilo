@@ -33,9 +33,11 @@ function getOidcToken(req) {
 export default async function handler(req, res) {
   if (req.method === 'GET') {
     const missing = [];
-    if (!process.env.BLOB_STORE_ID) missing.push('BLOB_STORE_ID');
-    if (!process.env.BLOB_WEBHOOK_PUBLIC_KEY) missing.push('BLOB_WEBHOOK_PUBLIC_KEY');
-    if (!getOidcToken(req) && !process.env.BLOB_READ_WRITE_TOKEN) missing.push('Vercel Blob authentication');
+    const hasStandardToken = Boolean(process.env.BLOB_READ_WRITE_TOKEN);
+    const hasPrivateBlob = Boolean(process.env.BLOB_STORE_ID && process.env.BLOB_WEBHOOK_PUBLIC_KEY);
+    if (!hasStandardToken && !hasPrivateBlob && !getOidcToken(req)) {
+      missing.push('BLOB_READ_WRITE_TOKEN or BLOB_STORE_ID');
+    }
     return res.status(200).json({ ready: missing.length === 0, missing });
   }
   try {
@@ -70,15 +72,20 @@ export default async function handler(req, res) {
             : [fileType];
         const maximumSizeInBytes = fileType.startsWith('video/') ? 150 * 1024 * 1024 : 100 * 1024 * 1024;
         const validUntil = Math.min(Date.now() + 30 * 60 * 1000, expiresAt);
-        const token = await issueSignedToken({
+        const tokenParams = {
           pathname,
           operations: ['put'],
           allowedContentTypes,
           maximumSizeInBytes,
           validUntil,
-          oidcToken: getOidcToken(req),
-          storeId: process.env.BLOB_STORE_ID,
-        });
+        };
+        if (process.env.BLOB_STORE_ID) {
+          tokenParams.storeId = process.env.BLOB_STORE_ID;
+          tokenParams.oidcToken = getOidcToken(req);
+        } else if (process.env.BLOB_READ_WRITE_TOKEN) {
+          tokenParams.token = process.env.BLOB_READ_WRITE_TOKEN;
+        }
+        const token = await issueSignedToken(tokenParams);
         return {
           token,
           urlOptions: {
